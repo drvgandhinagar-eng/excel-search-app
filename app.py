@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime, timedelta
 import os
-from datetime import datetime
 
 # -------------------------------
 # CONFIG
@@ -23,10 +23,13 @@ def load_excel():
     return None
 
 # -------------------------------
-# Save Upload Time
+# Save Upload Time (IST)
 # -------------------------------
 def save_upload_time():
-    now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    # Get UTC time, convert to IST (UTC+5:30)
+    ist_time = (datetime.utcnow() + timedelta(hours=5, minutes=30))
+    now = ist_time.strftime("%d-%m-%Y %H:%M:%S")
+
     with open(TIME_FILE, "w") as f:
         f.write(now)
 
