@@ -1,155 +1,143 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime
 
-# ---------------- Config ----------------
-ADMIN_USERNAME = "RSV"  # exact username you provided earlier
-ADMIN_PASSWORD = "RSV@9328"
+# -------------------------------
+# CONFIG
+# -------------------------------
+st.set_page_config(page_title="Material Search", layout="centered")
 
-UPLOAD_PATH = "current.xlsx"  # server filename (will store uploaded bytes here)
+EXCEL_FILE = "uploaded_file.xlsx"
+TIME_FILE = "upload_time.txt"
 
-# ---------------- Helpers ----------------
-def file_exists():
-    return os.path.exists(UPLOAD_PATH)
+ADMIN_USER = "RSV"
+ADMIN_PASS = "RSV@9328"
 
-def load_dataframe():
-    if not file_exists():
-        return None
-    # Try Excel first, then CSV
-    try:
-        df = pd.read_excel(UPLOAD_PATH, engine="openpyxl")
-    except Exception:
-        try:
-            df = pd.read_csv(UPLOAD_PATH)
-        except Exception:
-            return None
-    return df
+# -------------------------------
+# Load Excel
+# -------------------------------
+def load_excel():
+    if os.path.exists(EXCEL_FILE):
+        return pd.read_excel(EXCEL_FILE)
+    return None
 
-def save_uploaded_file(uploaded_file):
-    # Save uploaded file to UPLOAD_PATH (overwrite)
-    with open(UPLOAD_PATH, "wb") as f:
-        f.write(uploaded_file.getbuffer())
+# -------------------------------
+# Save Upload Time
+# -------------------------------
+def save_upload_time():
+    now = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    with open(TIME_FILE, "w") as f:
+        f.write(now)
 
-def remove_file():
-    if file_exists():
-        os.remove(UPLOAD_PATH)
+def load_upload_time():
+    if os.path.exists(TIME_FILE):
+        return open(TIME_FILE, "r").read()
+    return "No file uploaded yet"
 
-def get_file_info():
-    if not file_exists():
-        return None
-    stat = os.stat(UPLOAD_PATH)
-    mtime = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-    size_kb = stat.st_size // 1024
-    df = load_dataframe()
-    if df is not None:
-        shape = f"{df.shape[0]} rows × {df.shape[1]} columns"
-    else:
-        shape = ""
-    return {"modified": mtime, "size_kb": size_kb, "shape": shape}
+# -------------------------------
+# Top Navigation (Guest / Admin)
+# -------------------------------
+def top_nav():
+    col1, col2, col3 = st.columns([1, 1, 6])
+    with col1:
+        if st.button("Guest"):
+            st.session_state["mode"] = "guest"
+    with col2:
+        if st.button("Admin"):
+            st.session_state["mode"] = "admin_login"
 
-# ---------------- Session state ----------------
-if "admin_logged_in" not in st.session_state:
-    st.session_state.admin_logged_in = False
+# -------------------------------
+# Guest Screen
+# -------------------------------
+def guest_screen():
+    st.markdown("<h2 style='text-align:center;'>Guest Search</h2>", unsafe_allow_html=True)
 
-# ---------------- UI ----------------
-st.set_page_config(page_title="Excel Search App", layout="wide")
-st.title("Excel Search App")
+    upload_time = load_upload_time()
+    st.markdown(f"<p style='text-align:center; font-size:18px;'>📅 Last Upload: <b>{upload_time}</b></p>",
+                unsafe_allow_html=True)
 
-st.markdown("Choose your mode and proceed:")
-mode = st.radio("", ("Guest", "Admin"), horizontal=True)
-st.markdown("---")
-
-file_info = get_file_info()
-
-# ----- ADMIN FLOW -----
-if mode == "Admin":
-    st.subheader("Admin Panel")
-    if not st.session_state.admin_logged_in:
-        st.info("Enter admin credentials to upload or delete the dataset.")
-        col1, col2 = st.columns([2,1])
-        with col1:
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-        with col2:
-            if st.button("Login"):
-                if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-                    st.session_state.admin_logged_in = True
-                    st.success("Admin logged in.")
-                    st.experimental_rerun()
-                else:
-                    st.error("Invalid credentials.")
-    else:
-        st.success(f"Logged in as admin: {ADMIN_USERNAME}")
-        # Show file info
-        st.markdown("#### Current file info")
-        if file_info:
-            st.info(
-                f"**Uploaded On:** {file_info['modified']}  \n"
-                f"**File Size:** {file_info['size_kb']} KB  \n"
-                f"**Shape:** {file_info['shape']}"
-            )
-            # preview
-            df_preview = load_dataframe()
-            if df_preview is not None:
-                st.write("Preview (first 10 rows):")
-                st.dataframe(df_preview.head(10))
-            else:
-                st.warning("Could not load preview (file unreadable).")
-        else:
-            st.warning("No file is uploaded currently.")
-
-        st.markdown("#### Upload new file (this will replace the current file)")
-        uploaded_file = st.file_uploader("Upload Excel (.xlsx, .xls) or CSV (.csv)", type=["xlsx","xls","csv"], key="admin_uploader")
-        if uploaded_file is not None:
-            save_uploaded_file(uploaded_file)
-            st.success("File uploaded and saved (replaced any existing file).")
-            st.experimental_rerun()
-
-        if file_exists():
-            if st.button("Delete current file"):
-                remove_file()
-                st.success("File deleted by admin.")
-                st.experimental_rerun()
-
-        if st.button("Logout"):
-            st.session_state.admin_logged_in = False
-            st.experimental_rerun()
-
-# ----- GUEST FLOW -----
-else:
-    st.subheader("Guest (Search only)")
-    st.info("Guests can search the uploaded file. Guests cannot upload or delete files.")
-
-    st.markdown("#### Current file info")
-    if file_info:
-        st.info(
-            f"**Uploaded On:** {file_info['modified']}  \n"
-            f"**File Size:** {file_info['size_kb']} KB  \n"
-            f"**Shape:** {file_info['shape']}"
-        )
-    else:
-        st.warning("No file uploaded yet. Please ask Admin to upload a file.")
-
-    df = load_dataframe()
+    df = load_excel()
     if df is None:
-        st.stop()
+        st.warning("No Excel file uploaded yet.")
+        return
 
-    query = st.text_input("Search for text or number (partial match, case-insensitive)", key="guest_search")
-    cols_to_show = st.multiselect("Columns to display (optional)", options=list(df.columns))
+    st.write("")
 
-    if query:
-        mask = df.apply(lambda row: row.astype(str).str.contains(str(query), case=False, na=False).any(), axis=1)
-        result = df[mask]
+    search_value = st.text_input("", placeholder="Enter text to search", key="guest_search")
+    if st.button("SUBMIT"):
+        result = df[df.apply(lambda row: row.astype(str).str.contains(search_value, case=False).any(), axis=1)]
+
         if result.empty:
-            st.warning("No matching rows found.")
+            st.error("No matching data found.")
         else:
-            st.success(f"{len(result)} matching row(s) found.")
-            if cols_to_show:
-                st.dataframe(result[cols_to_show])
+            st.success("Match found:")
+            st.dataframe(result)
+
+# -------------------------------
+# Admin Login Screen
+# -------------------------------
+def admin_login():
+    st.markdown("<h2 style='text-align:center;'>Admin Login</h2>", unsafe_allow_html=True)
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if username == ADMIN_USER and password == ADMIN_PASS:
+            st.session_state["mode"] = "admin_panel"
+        else:
+            st.error("Incorrect username or password.")
+
+# -------------------------------
+# Admin Panel
+# -------------------------------
+def admin_panel():
+    st.markdown("<h2 style='text-align:center;'>Admin Panel</h2>", unsafe_allow_html=True)
+
+    upload_time = load_upload_time()
+    st.markdown(f"<p style='text-align:center; font-size:18px;'>📅 Last Upload: <b>{upload_time}</b></p>",
+                unsafe_allow_html=True)
+
+    st.subheader("Upload New Excel File")
+    uploaded = st.file_uploader("Choose Excel file", type=["xlsx"])
+
+    if uploaded:
+        with open(EXCEL_FILE, "wb") as f:
+            f.write(uploaded.read())
+        save_upload_time()
+        st.success("File uploaded successfully!")
+
+    st.subheader("Delete Current Excel File")
+    if st.button("Delete File"):
+        if os.path.exists(EXCEL_FILE):
+            os.remove(EXCEL_FILE)
+        if os.path.exists(TIME_FILE):
+            os.remove(TIME_FILE)
+        st.warning("File deleted successfully!")
+
+    st.subheader("Search (Admin)")
+    df = load_excel()
+    if df is not None:
+        search_admin = st.text_input("Search", key="admin_search")
+        if st.button("Admin Submit"):
+            result = df[df.apply(lambda row: row.astype(str).str.contains(search_admin, case=False).any(), axis=1)]
+            if result.empty:
+                st.error("No matching data found.")
             else:
                 st.dataframe(result)
-    else:
-        st.info("Type a search term to find matching rows.")
 
+# -------------------------------
+# MAIN APP LOGIC
+# -------------------------------
+if "mode" not in st.session_state:
+    st.session_state["mode"] = "guest"  # Default mode
+
+top_nav()
+
+if st.session_state["mode"] == "guest":
+    guest_screen()
+elif st.session_state["mode"] == "admin_login":
+    admin_login()
+elif st.session_state["mode"] == "admin_panel":
+    admin_panel()
