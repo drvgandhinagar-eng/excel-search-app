@@ -3,6 +3,45 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta
 
+# --- Add Shortcut Button (JavaScript) ---
+shortcut_button = """
+<style>
+.add-shortcut-btn {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    background-color: #ff7f00;
+    color: white;
+    padding: 8px 14px;
+    font-size: 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    z-index: 9999;
+}
+</style>
+
+<button class="add-shortcut-btn" id="addShortcut">Add Shortcut</button>
+
+<script>
+document.getElementById("addShortcut").addEventListener("click", function () {
+
+    // ANDROID CHROME — create shortcut
+    if (navigator.share) {
+        alert("To add to Home Screen: Tap the 3 dots menu → 'Add to Home screen'");
+    } 
+    
+    // OTHER BROWSERS
+    else {
+        alert("To add shortcut: Open browser menu → Add to Home Screen");
+    }
+
+});
+</script>
+"""
+
+import streamlit as st
+st.markdown(shortcut_button, unsafe_allow_html=True)
+
 # -----------------------------------
 # CONFIG
 # -----------------------------------
