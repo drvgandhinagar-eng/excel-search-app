@@ -1,154 +1,202 @@
 import streamlit as st
 import pandas as pd
 import os
+import json
+import tempfile
 from datetime import datetime, timedelta
 
-# -----------------------------------
-# CONFIG
-# -----------------------------------
-st.set_page_config(page_title="Material Search", layout="centered")
+# Firebase Admin SDK
+import firebase_admin
+from firebase_admin import credentials, storage
 
-EXCEL_FILE = "uploaded_file.xlsx"
-TIME_FILE = "upload_time.txt"
+# ---------------------------
+# CONFIG
+# ---------------------------
+st.set_page_config(page_title="Material Search", layout="centered")
 
 ADMIN_USER = "RSV"
 ADMIN_PASS = "RSV@9328"
 
-# -----------------------------------
-# SAVE & LOAD TIME (IST)
-# -----------------------------------
-def save_upload_time():
-    ist_time = datetime.utcnow() + timedelta(hours=5, minutes=30)
-    now = ist_time.strftime("%d-%m-%Y %H:%M:%S")
+REMOTE_FILE = "uploaded_file.xlsx"
+REMOTE_TIME = "upload_time.txt"
 
-    with open(TIME_FILE, "w") as f:
-        f.write(now)
+LOCAL_FILE = "latest.xlsx"
+
+
+# ---------------------------
+# INIT FIREBASE
+# ---------------------------
+def init_firebase():
+    if firebase_admin._apps:
+        return
+
+    # 1) Try GOOGLE_APPLICATION_CREDENTIALS (local testing)
+    cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if cred_path and os.path.exists(cred_path):
+        cred = credentials.Certificate(cred_path)
+    else:
+        # 2) Use Render env var FIREBASE_SERVICE_ACCOUNT (JSON string)
+        svc_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
+        if not svc_json:
+            st.error("Missing Firebase credentials. Set FIREBASE_SERVICE_ACCOUNT.")
+            st.stop()
+
+        # Write JSON string to a temporary file
+        temp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+        temp.write(svc_json.encode("utf-8"))
+        temp.close()
+        cred = credentials.Certificate(temp.name)
+
+    # Storage bucket name
+    bucket_name = os.environ.get("FIREBASE_STORAGE_BUCKET", "material-excel.appspot.com")
+
+    firebase_admin.initialize_app(cred, {
+        "storageBucket": bucket_name
+    })
+
+
+# ---------------------------
+# FIREBASE STORAGE HELPERS
+# ---------------------------
+def get_bucket():
+    init_firebase()
+    return storage.bucket()
+
+
+def upload_file_to_firebase(file_bytes):
+    bucket = get_bucket()
+
+    # delete old file
+    blob = bucket.blob(REMOTE_FILE)
+    if blob.exists():
+        blob.delete()
+
+    # upload new file
+    blob.upload_from_string(file_bytes, content_type="application/octet-stream")
+
+
+def download_file_from_firebase():
+    bucket = get_bucket()
+    blob = bucket.blob(REMOTE_FILE)
+
+    if not blob.exists():
+        return False
+
+    blob.download_to_filename(LOCAL_FILE)
+    return True
+
+
+def delete_remote_file():
+    bucket = get_bucket()
+    blob = bucket.blob(REMOTE_FILE)
+    if blob.exists():
+        blob.delete()
+
+
+def save_upload_time():
+    bucket = get_bucket()
+    ist = datetime.utcnow() + timedelta(hours=5, minutes=30)
+    blob = bucket.blob(REMOTE_TIME)
+    blob.upload_from_string(ist.strftime("%d-%m-%Y %H:%M:%S"))
+
 
 def load_upload_time():
-    if os.path.exists(TIME_FILE):
-        return open(TIME_FILE, "r").read()
-    return "No file uploaded yet"
+    bucket = get_bucket()
+    blob = bucket.blob(REMOTE_TIME)
 
-# -----------------------------------
-# LOAD EXCEL
-# -----------------------------------
-def load_excel():
-    if os.path.exists(EXCEL_FILE):
-        return pd.read_excel(EXCEL_FILE)
-    return None
+    if not blob.exists():
+        return "No file uploaded yet"
 
-# -----------------------------------
-# TOP NAVIGATION
-# -----------------------------------
-def top_nav():
-    col1, col2, col3 = st.columns([1, 1, 6])
+    return blob.download_as_text()
 
-    with col1:
-        if st.button("Guest"):
-            st.session_state["mode"] = "guest"
 
-    with col2:
-        if st.button("Admin"):
-            st.session_state["mode"] = "admin_login"
-
-# -----------------------------------
-# GUEST SCREEN
-# -----------------------------------
+# ---------------------------
+# PAGE LOGIC
+# ---------------------------
 def guest_screen():
-    st.markdown("<h2 style='text-align:center;'>Guest Search</h2>", unsafe_allow_html=True)
+    st.subheader("Guest Search")
 
-    upload_time = load_upload_time()
-    st.markdown(
-        f"<p style='text-align:center; font-size:18px;'>📅 Last Upload: <b>{upload_time}</b></p>",
-        unsafe_allow_html=True
-    )
+    st.markdown(f"**Last Upload:** {load_upload_time()}")
 
-    df = load_excel()
-    if df is None:
-        st.warning("No Excel file uploaded yet.")
+    if not download_file_from_firebase():
+        st.warning("No file uploaded yet")
+        return
+
+    try:
+        df = pd.read_excel(LOCAL_FILE)
+    except:
+        st.error("File corrupted — ask admin to reupload.")
         return
 
     query = st.text_input("", placeholder="Enter text to search")
 
     if st.button("SUBMIT"):
         result = df[df.apply(lambda row: row.astype(str).str.contains(query, case=False).any(), axis=1)]
-
         if result.empty:
-            st.error("No matching data found.")
+            st.warning("No matching data found.")
         else:
-            st.success("Match found:")
             st.dataframe(result)
 
-# -----------------------------------
-# ADMIN LOGIN
-# -----------------------------------
-def admin_login():
-    st.markdown("<h2 style='text-align:center;'>Admin Login</h2>", unsafe_allow_html=True)
 
-    username = st.text_input("Admin ID")
-    password = st.text_input("Password", type="password")
+def admin_login():
+    st.subheader("Admin Login")
+    user = st.text_input("ID")
+    pwd = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if username == ADMIN_USER and password == ADMIN_PASS:
-            st.session_state["mode"] = "admin_panel"
+        if user == ADMIN_USER and pwd == ADMIN_PASS:
+            st.session_state["mode"] = "admin"
+            st.experimental_rerun()
         else:
-            st.error("Incorrect ID or Password.")
+            st.error("Incorrect credentials")
 
-# -----------------------------------
-# ADMIN PANEL
-# -----------------------------------
+
 def admin_panel():
-    st.markdown("<h2 style='text-align:center;'>Admin Panel</h2>", unsafe_allow_html=True)
+    st.subheader("Admin Panel")
 
-    upload_time = load_upload_time()
-    st.markdown(
-        f"<p style='text-align:center; font-size:18px;'>📅 Last Upload: <b>{upload_time}</b></p>",
-        unsafe_allow_html=True
-    )
+    st.markdown(f"**Last Upload:** {load_upload_time()}")
 
-    st.subheader("Upload New Excel File")
-    uploaded = st.file_uploader("Choose Excel file", type=["xlsx"])
-
+    uploaded = st.file_uploader("Upload Excel", type=["xlsx"])
     if uploaded:
-        with open(EXCEL_FILE, "wb") as f:
-            f.write(uploaded.read())
+        upload_file_to_firebase(uploaded.getvalue())
         save_upload_time()
         st.success("File uploaded successfully!")
+        st.experimental_rerun()
 
-    st.subheader("Delete Current File")
     if st.button("Delete File"):
-        if os.path.exists(EXCEL_FILE):
-            os.remove(EXCEL_FILE)
-        if os.path.exists(TIME_FILE):
-            os.remove(TIME_FILE)
-        st.warning("File deleted successfully!")
+        delete_remote_file()
+        st.warning("File deleted!")
+        st.experimental_rerun()
 
-    st.subheader("Admin Search")
-    df = load_excel()
-
-    if df is not None:
-        query = st.text_input("Search")
+    # Search
+    if download_file_from_firebase():
+        df = pd.read_excel(LOCAL_FILE)
+        st.subheader("Admin Search")
+        q = st.text_input("Search")
         if st.button("Search (Admin)"):
-            result = df[df.apply(lambda row: row.astype(str).str.contains(query, case=False).any(), axis=1)]
+            result = df[df.apply(lambda row: row.astype(str).str.contains(q, case=False).any(), axis=1)]
+            st.dataframe(result)
 
-            if result.empty:
-                st.error("No matching data found.")
-            else:
-                st.dataframe(result)
 
-# -----------------------------------
-# MAIN LOGIC
-# -----------------------------------
+# ---------------------------
+# MAIN
+# ---------------------------
 if "mode" not in st.session_state:
-    st.session_state["mode"] = "guest"  # Default mode
+    st.session_state["mode"] = "guest"
 
-top_nav()
+# TOP BUTTONS
+c1, c2, _ = st.columns([1, 1, 6])
+with c1:
+    if st.button("Guest"):
+        st.session_state["mode"] = "guest"
+with c2:
+    if st.button("Admin"):
+        st.session_state["mode"] = "login"
 
+# ROUTING
 if st.session_state["mode"] == "guest":
     guest_screen()
-
-elif st.session_state["mode"] == "admin_login":
+elif st.session_state["mode"] == "login":
     admin_login()
-
-elif st.session_state["mode"] == "admin_panel":
+elif st.session_state["mode"] == "admin":
     admin_panel()
